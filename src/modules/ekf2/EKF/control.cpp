@@ -142,7 +142,8 @@ void Ekf::controlFusionModes()
 			_range_sensor.setRange(_range_sensor.getRange() + pos_offset_earth(2) / _range_sensor.getCosTilt());
 
 			// Run the kinematic consistency check when not moving horizontally
-			if ((sq(_state.vel(0)) + sq(_state.vel(1)) < fmaxf(P(4, 4) + P(5, 5), 0.1f))) {
+			if (_control_status.flags.in_air && !_control_status.flags.fixed_wing
+			    && (sq(_state.vel(0)) + sq(_state.vel(1)) < fmaxf(P(4, 4) + P(5, 5), 0.1f))) {
 				_rng_consistency_check.setGate(_params.range_kin_consistency_gate);
 				_rng_consistency_check.update(_range_sensor.getDistBottom(), getRngHeightVariance(), _state.vel(2), P(6, 6), _time_last_imu);
 			}
@@ -188,6 +189,8 @@ void Ekf::controlFusionModes()
 
 	// Additional horizontal velocity data from an auxiliary sensor can be fused
 	controlAuxVelFusion();
+
+	controlZeroInnovationHeadingUpdate();
 
 	controlZeroVelocityUpdate();
 
@@ -363,14 +366,11 @@ void Ekf::controlExternalVisionFusion()
 				resetYawToEv();
 			}
 
-			if (shouldUse321RotationSequence(_R_to_earth)) {
-				float measured_hdg = getEuler321Yaw(_ev_sample_delayed.quat);
-				fuseYaw321(measured_hdg, _ev_sample_delayed.angVar);
+			float measured_hdg = shouldUse321RotationSequence(_R_to_earth) ? getEuler321Yaw(_ev_sample_delayed.quat) : getEuler312Yaw(_ev_sample_delayed.quat);
 
-			} else {
-				float measured_hdg = getEuler312Yaw(_ev_sample_delayed.quat);
-				fuseYaw312(measured_hdg, _ev_sample_delayed.angVar);
-			}
+			float innovation = wrap_pi(getEulerYaw(_R_to_earth) - measured_hdg);
+			float obs_var = fmaxf(_ev_sample_delayed.angVar, 1.e-4f);
+			fuseYaw(innovation, obs_var);
 		}
 
 		// record observation and estimate for use next time
@@ -1009,7 +1009,7 @@ void Ekf::controlAirDataFusion()
 	// control activation and initialisation/reset of wind states required for airspeed fusion
 
 	// If both airspeed and sideslip fusion have timed out and we are not using a drag observation model then we no longer have valid wind estimates
-	const bool airspeed_timed_out = isTimedOut(_time_last_arsp_fuse, (uint64_t)10e6);
+	const bool airspeed_timed_out = isTimedOut(_aid_src_airspeed.time_last_fuse, (uint64_t)10e6);
 	const bool sideslip_timed_out = isTimedOut(_time_last_beta_fuse, (uint64_t)10e6);
 
 	if (_using_synthetic_position || (airspeed_timed_out && sideslip_timed_out && !(_params.fusion_mode & SensorFusionMask::USE_DRAG))) {
@@ -1022,17 +1022,23 @@ void Ekf::controlAirDataFusion()
 	}
 
 	if (_tas_data_ready) {
+		updateAirspeed(_airspeed_sample_delayed, _aid_src_airspeed);
+
+		_innov_check_fail_status.flags.reject_airspeed = _aid_src_airspeed.innovation_rejected; // TODO: remove this redundant flag
+
 		const bool continuing_conditions_passing = _control_status.flags.in_air && _control_status.flags.fixed_wing && !_using_synthetic_position;
 		const bool is_airspeed_significant = _airspeed_sample_delayed.true_airspeed > _params.arsp_thr;
-		const bool starting_conditions_passing = continuing_conditions_passing && is_airspeed_significant;
+		const bool is_airspeed_consistent = (_aid_src_airspeed.test_ratio > 0.f && _aid_src_airspeed.test_ratio < 1.f);
+		const bool starting_conditions_passing = continuing_conditions_passing && is_airspeed_significant
+		                                         && (is_airspeed_consistent || !_control_status.flags.wind); // if wind isn't already estimated, the states are reset when starting airspeed fusion
 
 		if (_control_status.flags.fuse_aspd) {
 			if (continuing_conditions_passing) {
 				if (is_airspeed_significant) {
-					fuseAirspeed();
+					fuseAirspeed(_aid_src_airspeed);
 				}
 
-				const bool is_fusion_failing = isTimedOut(_time_last_arsp_fuse, (uint64_t)10e6);
+				const bool is_fusion_failing = isTimedOut(_aid_src_airspeed.time_last_fuse, (uint64_t)10e6);
 
 				if (is_fusion_failing) {
 					stopAirspeedFusion();

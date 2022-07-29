@@ -183,6 +183,13 @@ MissionBlock::is_mission_item_reached()
 			}
 
 		} else if (_mission_item.nav_cmd == NAV_CMD_TAKEOFF
+			   && _navigator->get_vstatus()->vehicle_type == vehicle_status_s::VEHICLE_TYPE_FIXED_WING) {
+			/* fixed-wing takeoff is reached once the vehicle has exceeded the takeoff altitude */
+			if (_navigator->get_global_position()->alt > mission_item_altitude_amsl) {
+				_waypoint_position_reached = true;
+			}
+
+		} else if (_mission_item.nav_cmd == NAV_CMD_TAKEOFF
 			   && _navigator->get_vstatus()->vehicle_type == vehicle_status_s::VEHICLE_TYPE_ROVER) {
 			/* for takeoff mission items use the parameter for the takeoff acceptance radius */
 			if (dist_xy >= 0.0f && dist_xy <= _navigator->get_acceptance_radius()) {
@@ -577,8 +584,7 @@ MissionBlock::item_contains_position(const mission_item_s &item)
 	       item.nav_cmd == NAV_CMD_TAKEOFF ||
 	       item.nav_cmd == NAV_CMD_LOITER_TO_ALT ||
 	       item.nav_cmd == NAV_CMD_VTOL_TAKEOFF ||
-	       item.nav_cmd == NAV_CMD_VTOL_LAND ||
-	       item.nav_cmd == NAV_CMD_DO_FOLLOW_REPOSITION;
+	       item.nav_cmd == NAV_CMD_VTOL_LAND;
 }
 
 bool
@@ -608,7 +614,7 @@ MissionBlock::mission_item_to_position_setpoint(const mission_item_s &item, posi
 	sp->yaw_valid = PX4_ISFINITE(item.yaw);
 	sp->loiter_radius = (fabsf(item.loiter_radius) > NAV_EPSILON_POSITION) ? fabsf(item.loiter_radius) :
 			    _navigator->get_loiter_radius();
-	sp->loiter_direction = (item.loiter_radius > 0) ? 1 : -1;
+	sp->loiter_direction = math::signNoZero(item.loiter_radius);
 
 	if (item.acceptance_radius > 0.0f && PX4_ISFINITE(item.acceptance_radius)) {
 		// if the mission item has a specified acceptance radius, overwrite the default one from parameters
@@ -620,6 +626,10 @@ MissionBlock::mission_item_to_position_setpoint(const mission_item_s &item, posi
 
 	sp->cruising_speed = _navigator->get_cruising_speed();
 	sp->cruising_throttle = _navigator->get_cruising_throttle();
+
+	// for fixed wing we don't use cruising_throttle directly anymore, instead we command airspeed setpoints via cruising_speed
+	// we still use cruising throttle here to determine if gliding is enabled
+	sp->gliding_enabled = (_navigator->get_cruising_throttle() < FLT_EPSILON);
 
 	switch (item.nav_cmd) {
 	case NAV_CMD_IDLE:

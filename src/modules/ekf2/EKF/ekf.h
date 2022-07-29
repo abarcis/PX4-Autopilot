@@ -46,7 +46,7 @@
 #include "estimator_interface.h"
 
 #include "EKFGSF_yaw.h"
-#include "baro_bias_estimator.hpp"
+#include "bias_estimator.hpp"
 
 #include <uORB/topics/estimator_aid_source_1d.h>
 #include <uORB/topics/estimator_aid_source_2d.h>
@@ -104,9 +104,12 @@ public:
 
 	const Vector2f &getFlowVelBody() const { return _flow_vel_body; }
 	const Vector2f &getFlowVelNE() const { return _flow_vel_ne; }
+
 	const Vector2f &getFlowCompensated() const { return _flow_compensated_XY_rad; }
 	const Vector2f &getFlowUncompensated() const { return _flow_sample_delayed.flow_xy_rad; }
-	const Vector3f &getFlowGyro() const { return _flow_sample_delayed.gyro_xyz; }
+
+	const Vector3f getFlowGyro() const { return _flow_sample_delayed.gyro_xyz * (1.f / _flow_sample_delayed.dt); }
+	const Vector3f &getFlowGyroIntegral() const { return _flow_sample_delayed.gyro_xyz; }
 
 	void getHeadingInnov(float &heading_innov) const { heading_innov = _heading_innov; }
 	void getHeadingInnovVar(float &heading_innov_var) const { heading_innov_var = _heading_innov_var; }
@@ -120,9 +123,9 @@ public:
 	void getDragInnovVar(float drag_innov_var[2]) const { _drag_innov_var.copyTo(drag_innov_var); }
 	void getDragInnovRatio(float drag_innov_ratio[2]) const { _drag_test_ratio.copyTo(drag_innov_ratio); }
 
-	void getAirspeedInnov(float &airspeed_innov) const { airspeed_innov = _airspeed_innov; }
-	void getAirspeedInnovVar(float &airspeed_innov_var) const { airspeed_innov_var = _airspeed_innov_var; }
-	void getAirspeedInnovRatio(float &airspeed_innov_ratio) const { airspeed_innov_ratio = _tas_test_ratio; }
+	void getAirspeedInnov(float &airspeed_innov) const { airspeed_innov = _aid_src_airspeed.innovation; }
+	void getAirspeedInnovVar(float &airspeed_innov_var) const { airspeed_innov_var = _aid_src_airspeed.innovation_variance; }
+	void getAirspeedInnovRatio(float &airspeed_innov_ratio) const { airspeed_innov_ratio = _aid_src_airspeed.test_ratio; }
 
 	void getBetaInnov(float &beta_innov) const { beta_innov = _beta_innov; }
 	void getBetaInnovVar(float &beta_innov_var) const { beta_innov_var = _beta_innov_var; }
@@ -169,9 +172,9 @@ public:
 	// get the ekf WGS-84 origin position and height and the system time it was last set
 	// return true if the origin is valid
 	bool getEkfGlobalOrigin(uint64_t &origin_time, double &latitude, double &longitude, float &origin_alt) const;
-	void setEkfGlobalOrigin(const double latitude, const double longitude, const float altitude);
+	bool setEkfGlobalOrigin(const double latitude, const double longitude, const float altitude);
 
-	float getEkfGlobalOriginAltitude() const { return _gps_alt_ref; }
+	float getEkfGlobalOriginAltitude() const { return PX4_ISFINITE(_gps_alt_ref) ? _gps_alt_ref : 0.f; }
 	bool setEkfGlobalOriginAltitude(const float altitude);
 
 
@@ -193,7 +196,8 @@ public:
 	void resetAccelBias();
 
 	// Reset all magnetometer bias states and covariances to initial alignment values.
-	void resetMagBias();
+	// Requests full mag yaw reset (if using mag)
+	void resetMagBiasAndYaw();
 
 	Vector3f getVelocityVariance() const { return P.slice<3, 3>(4, 4).diag(); };
 
@@ -341,7 +345,9 @@ public:
 	// Returns true if the output of the yaw emergency estimator can be used for a reset
 	bool isYawEmergencyEstimateAvailable() const;
 
-	const BaroBiasEstimator::status &getBaroBiasEstimatorStatus() const { return _baro_b_est.getStatus(); }
+	const BiasEstimator::status &getBaroBiasEstimatorStatus() const { return _baro_b_est.getStatus(); }
+
+	const auto &aid_src_airspeed() const { return _aid_src_airspeed; }
 
 	const auto &aid_src_baro_hgt() const { return _aid_src_baro_hgt; }
 	const auto &aid_src_rng_hgt() const { return _aid_src_rng_hgt; }
@@ -406,13 +412,16 @@ private:
 	uint64_t _time_last_hgt_fuse{0};	///< time the last fusion of vertical position measurements was performed (uSec)
 	uint64_t _time_last_hor_vel_fuse{0};	///< time the last fusion of horizontal velocity measurements was performed (uSec)
 	uint64_t _time_last_ver_vel_fuse{0};	///< time the last fusion of verticalvelocity measurements was performed (uSec)
+	uint64_t _time_last_heading_fuse{0};
+
 	uint64_t _time_last_of_fuse{0};		///< time the last fusion of optical flow measurements were performed (uSec)
 	uint64_t _time_last_flow_terrain_fuse{0}; ///< time the last fusion of optical flow measurements for terrain estimation were performed (uSec)
-	uint64_t _time_last_arsp_fuse{0};	///< time the last fusion of airspeed measurements were performed (uSec)
 	uint64_t _time_last_beta_fuse{0};	///< time the last fusion of synthetic sideslip measurements were performed (uSec)
 	uint64_t _time_last_zero_velocity_fuse{0}; ///< last time of zero velocity update (uSec)
 	uint64_t _time_last_gps_yaw_fuse{0};	///< time the last fusion of GPS yaw measurements were performed (uSec)
 	uint64_t _time_last_gps_yaw_data{0};	///< time the last GPS yaw measurement was available (uSec)
+	uint64_t _time_last_mag_heading_fuse{0};
+	uint64_t _time_last_mag_3d_fuse{0};
 	uint64_t _time_last_healthy_rng_data{0};
 	uint8_t _nb_gps_yaw_reset_available{0}; ///< remaining number of resets allowed before switching to another aiding source
 
@@ -440,7 +449,6 @@ private:
 	bool _mag_yaw_reset_req{false};		///< true when a reset of the yaw using the magnetometer data has been requested
 	bool _mag_decl_cov_reset{false};	///< true after the fuseDeclination() function has been used to modify the earth field covariances after a magnetic field reset event.
 	bool _synthetic_mag_z_active{false};	///< true if we are generating synthetic magnetometer Z measurements
-	bool _non_mag_yaw_aiding_running_prev{false};  ///< true when heading is being fused from other sources that are not the magnetometer (for example EV or GPS).
 	bool _is_yaw_fusion_inhibited{false};		///< true when yaw sensor use is being inhibited
 
 	SquareMatrix24f P{};	///< state covariance matrix
@@ -471,9 +479,6 @@ private:
 	Vector2f _drag_innov{};		///< multirotor drag measurement innovation (m/sec**2)
 	Vector2f _drag_innov_var{};	///< multirotor drag measurement innovation variance ((m/sec**2)**2)
 
-	float _airspeed_innov{0.0f};		///< airspeed measurement innovation (m/sec)
-	float _airspeed_innov_var{0.0f};	///< airspeed measurement innovation variance ((m/sec)**2)
-
 	float _beta_innov{0.0f};	///< synthetic sideslip measurement innovation (rad)
 	float _beta_innov_var{0.0f};	///< synthetic sideslip measurement innovation variance (rad**2)
 
@@ -496,6 +501,7 @@ private:
 
 	estimator_aid_source_1d_s _aid_src_baro_hgt{};
 	estimator_aid_source_1d_s _aid_src_rng_hgt{};
+	estimator_aid_source_1d_s _aid_src_airspeed{};
 
 	estimator_aid_source_2d_s _aid_src_fake_pos{};
 
@@ -521,7 +527,7 @@ private:
 
 	// Variables used to publish the WGS-84 location of the EKF local NED origin
 	uint64_t _last_gps_origin_time_us{0};	///< time the origin was last set (uSec)
-	float _gps_alt_ref{0.0f};		///< WGS-84 height (m)
+	float _gps_alt_ref{NAN};		///< WGS-84 height (m)
 
 	// Variables used by the initial filter alignment
 	bool _is_first_imu_sample{true};
@@ -600,30 +606,12 @@ private:
 	void predictCovariance();
 
 	// ekf sequential fusion of magnetometer measurements
-	void fuseMag(const Vector3f &mag);
-
-	// fuse the first euler angle from either a 321 or 312 rotation sequence as the observation (currently measures yaw using the magnetometer)
-	void fuseHeading(float measured_hdg = NAN, float obs_var = NAN);
-
-	// fuse the yaw angle defined as the first rotation in a 321 Tait-Bryan rotation sequence
-	// yaw : angle observation defined as the first rotation in a 321 Tait-Bryan rotation sequence (rad)
-	// yaw_variance : variance of the yaw angle observation (rad^2)
-	// zero_innovation : Fuse data with innovation set to zero
-	bool fuseYaw321(const float yaw, const float yaw_variance, bool zero_innovation = false);
-
-	// fuse the yaw angle defined as the first rotation in a 312 Tait-Bryan rotation sequence
-	// yaw : angle observation defined as the first rotation in a 312 Tait-Bryan rotation sequence (rad)
-	// yaw_variance : variance of the yaw angle observation (rad^2)
-	// zero_innovation : Fuse data with innovation set to zero
-	bool fuseYaw312(const float yaw, const float yaw_variance, bool zero_innovation = false);
+	bool fuseMag(const Vector3f &mag, bool update_all_states = true);
 
 	// update quaternion states and covariances using an innovation, observation variance and Jacobian vector
 	// innovation : prediction - measurement
 	// variance : observaton variance
-	// gate_sigma : innovation consistency check gate size (Sigma)
-	// jacobian : 4x1 vector of partial derivatives of observation wrt each quaternion state
-	bool updateQuaternion(const float innovation, const float variance, const float gate_sigma,
-			      const Vector4f &yaw_jacobian);
+	bool fuseYaw(const float innovation, const float variance);
 
 	// fuse the yaw angle obtained from a dual antenna GPS unit
 	void fuseGpsYaw();
@@ -634,13 +622,13 @@ private:
 
 	// fuse magnetometer declination measurement
 	// argument passed in is the declination uncertainty in radians
-	void fuseDeclination(float decl_sigma);
+	bool fuseDeclination(float decl_sigma);
 
 	// apply sensible limits to the declination and length of the NE mag field states estimates
 	void limitDeclination();
 
-	// fuse airspeed measurement
-	void fuseAirspeed();
+	void updateAirspeed(const airspeedSample &airspeed_sample, estimator_aid_source_1d_s &airspeed) const;
+	void fuseAirspeed(estimator_aid_source_1d_s &airspeed);
 
 	// fuse synthetic zero sideslip measurement
 	void fuseSideslip();
@@ -735,7 +723,7 @@ private:
 
 	// reset the heading and magnetic field states using the declination and magnetometer measurements
 	// return true if successful
-	bool resetMagHeading(bool increase_yaw_var = true, bool update_buffer = true);
+	bool resetMagHeading();
 
 	// reset the heading using the external vision measurements
 	// return true if successful
@@ -859,14 +847,10 @@ private:
 	// control fusion of magnetometer observations
 	void controlMagFusion();
 
-	bool noOtherYawAidingThanMag() const;
-	bool otherHeadingSourcesHaveStopped();
-
 	void checkHaglYawResetReq();
 	float getTerrainVPos() const { return isTerrainEstimateValid() ? _terrain_vpos : _last_on_ground_posD; }
 
 	void runOnGroundYawReset();
-	bool isYawResetAuthorized() const { return !_is_yaw_fusion_inhibited; }
 	bool canResetMagHeading() const;
 	void runInAirYawReset(const Vector3f &mag);
 
@@ -874,15 +858,12 @@ private:
 	void check3DMagFusionSuitability();
 	void checkYawAngleObservability();
 	void checkMagBiasObservability();
-	bool isYawAngleObservable() const { return _yaw_angle_observable; }
-	bool isMagBiasObservable() const { return _mag_bias_observable; }
 	bool canUse3DMagFusion() const;
 
 	void checkMagDeclRequired();
 	void checkMagInhibition();
 	bool shouldInhibitMag() const;
-	void checkMagFieldStrength(const Vector3f &mag);
-	bool isStrongMagneticDisturbance() const { return _control_status.flags.mag_field_disturbed; }
+	bool magFieldStrengthDisturbed(const Vector3f &mag) const;
 	static bool isMeasuredMatchingExpected(float measured, float expected, float gate);
 	void runMagAndMagDeclFusions(const Vector3f &mag);
 	void run3DMagAndDeclFusions(const Vector3f &mag);
@@ -906,6 +887,8 @@ private:
 	void controlFakePosFusion();
 
 	void controlZeroVelocityUpdate();
+
+	void controlZeroInnovationHeadingUpdate();
 
 	// control fusion of auxiliary velocity observations
 	void controlAuxVelFusion();
@@ -1046,14 +1029,14 @@ private:
 	// yaw : Euler yaw angle (rad)
 	// yaw_variance : yaw error variance (rad^2)
 	// update_buffer : true if the state change should be also applied to the output observer buffer
-	void resetQuatStateYaw(float yaw, float yaw_variance, bool update_buffer);
+	void resetQuatStateYaw(float yaw, float yaw_variance, bool update_buffer = true);
 
 	// Declarations used to control use of the EKF-GSF yaw estimator
 
 	// yaw estimator instance
 	EKFGSF_yaw _yawEstimator{};
 
-	BaroBiasEstimator _baro_b_est{};
+	BiasEstimator _baro_b_est{};
 
 	int64_t _ekfgsf_yaw_reset_time{0};	///< timestamp of last emergency yaw reset (uSec)
 	uint8_t _ekfgsf_yaw_reset_count{0};	// number of times the yaw has been reset to the EKF-GSF estimate

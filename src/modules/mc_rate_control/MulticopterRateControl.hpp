@@ -94,8 +94,7 @@ private:
 	void updateActuatorControlsStatus(const actuator_controls_s &actuators, float dt);
 
 	void publishTorqueSetpoint(const matrix::Vector3f &torque_sp, const hrt_abstime &timestamp_sample);
-
-	void publishThrustSetpoint(const float thrust_setpoint, const hrt_abstime &timestamp_sample);
+	void publishThrustSetpoint(const hrt_abstime &timestamp_sample);
 
 	RateControl _rate_control; ///< class for rate control calculations
 
@@ -125,7 +124,6 @@ private:
 	vehicle_control_mode_s	_vehicle_control_mode{};
 	vehicle_status_s	_vehicle_status{};
 
-	bool _actuators_0_circuit_breaker_enabled{false};	/**< circuit breaker to suppress output */
 	bool _landed{true};
 	bool _maybe_landed{true};
 
@@ -138,7 +136,7 @@ private:
 	matrix::Vector3f _rates_setpoint{};
 
 	float _battery_status_scale{0.0f};
-	float _thrust_setpoint{0.0f};
+	matrix::Vector3f _thrust_setpoint{};
 
 	float _energy_integration_time{0.0f};
 	float _control_energy[4] {};
@@ -177,8 +175,6 @@ private:
 		(ParamFloat<px4::params::MC_ACRO_SUPEXPO>) _param_mc_acro_supexpo,		/**< superexpo stick curve shape (roll & pitch) */
 		(ParamFloat<px4::params::MC_ACRO_SUPEXPOY>) _param_mc_acro_supexpoy,		/**< superexpo stick curve shape (yaw) */
 
-		(ParamBool<px4::params::MC_BAT_SCALE_EN>) _param_mc_bat_scale_en,
-
-		(ParamInt<px4::params::CBRK_RATE_CTRL>) _param_cbrk_rate_ctrl
+		(ParamBool<px4::params::MC_BAT_SCALE_EN>) _param_mc_bat_scale_en
 	)
 };

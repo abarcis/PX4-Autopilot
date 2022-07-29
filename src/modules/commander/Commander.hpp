@@ -41,6 +41,7 @@
 #include "state_machine_helper.h"
 #include "worker_thread.hpp"
 
+#include <containers/Bitset.hpp>
 #include <lib/controllib/blocks.hpp>
 #include <lib/hysteresis/hysteresis.h>
 #include <lib/mathlib/mathlib.h>
@@ -80,13 +81,13 @@
 #include <uORB/topics/parameter_update.h>
 #include <uORB/topics/power_button_state.h>
 #include <uORB/topics/rtl_time_estimate.h>
+#include <uORB/topics/sensor_gps.h>
 #include <uORB/topics/system_power.h>
 #include <uORB/topics/telemetry_status.h>
 #include <uORB/topics/vehicle_angular_velocity.h>
 #include <uORB/topics/vehicle_attitude.h>
 #include <uORB/topics/vehicle_command.h>
 #include <uORB/topics/vehicle_global_position.h>
-#include <uORB/topics/vehicle_gps_position.h>
 #include <uORB/topics/vehicle_land_detected.h>
 #include <uORB/topics/vehicle_local_position.h>
 #include <uORB/topics/vtol_vehicle_status.h>
@@ -243,9 +244,6 @@ private:
 		// Engine failure
 		(ParamInt<px4::params::COM_ACT_FAIL_ACT>) _param_com_actuator_failure_act,
 
-		(ParamBool<px4::params::COM_ARM_WO_GPS>) _param_arm_without_gps,
-		(ParamBool<px4::params::COM_ARM_MIS_REQ>) _param_arm_mission_required,
-		(ParamBool<px4::params::COM_ARM_AUTH_REQ>) _param_arm_auth_required,
 		(ParamBool<px4::params::COM_ARM_CHK_ESCS>) _param_escs_checks_required,
 
 		(ParamInt<px4::params::COM_FLIGHT_UUID>) _param_flight_uuid,
@@ -256,11 +254,12 @@ private:
 		(ParamInt<px4::params::CBRK_USB_CHK>) _param_cbrk_usb_chk,
 		(ParamInt<px4::params::CBRK_AIRSPD_CHK>) _param_cbrk_airspd_chk,
 		(ParamInt<px4::params::CBRK_FLIGHTTERM>) _param_cbrk_flightterm,
-		(ParamInt<px4::params::CBRK_VELPOSERR>) _param_cbrk_velposerr,
 		(ParamInt<px4::params::CBRK_VTOLARMING>) _param_cbrk_vtolarming,
 
 		(ParamInt<px4::params::COM_FLT_TIME_MAX>) _param_com_flt_time_max,
-		(ParamFloat<px4::params::COM_WIND_MAX>) _param_com_wind_max
+		(ParamFloat<px4::params::COM_WIND_MAX>) _param_com_wind_max,
+
+		(ParamFloat<px4::params::COM_SPOOLUP_TIME>) _param_com_spoolup_time
 	)
 
 	// optional parameters
@@ -291,12 +290,9 @@ private:
 
 	/* Decouple update interval and hysteresis counters, all depends on intervals */
 	static constexpr uint64_t COMMANDER_MONITORING_INTERVAL{10_ms};
-
-	static constexpr uint64_t HOTPLUG_SENS_TIMEOUT{8_s};	/**< wait for hotplug sensors to come online for upto 8 seconds */
 	static constexpr uint64_t INAIR_RESTART_HOLDOFF_INTERVAL{500_ms};
 
 	ArmStateMachine _arm_state_machine{};
-	PreFlightCheck::arm_requirements_t	_arm_requirements{};
 
 	hrt_abstime	_valid_distance_sensor_time_us{0}; /**< Last time that distance sensor data arrived (usec) */
 
@@ -347,7 +343,7 @@ private:
 
 	uint8_t		_battery_warning{battery_status_s::BATTERY_WARNING_NONE};
 	hrt_abstime	_battery_failsafe_timestamp{0};
-	uint8_t		_last_connected_batteries{0};
+	px4::Bitset<battery_status_s::MAX_INSTANCES> _last_connected_batteries;
 	uint32_t	_last_battery_custom_fault[battery_status_s::MAX_INSTANCES] {};
 	uint16_t	_last_battery_fault[battery_status_s::MAX_INSTANCES] {};
 	uint8_t		_last_battery_mode[battery_status_s::MAX_INSTANCES] {};
@@ -402,7 +398,7 @@ private:
 	vehicle_status_s        _vehicle_status{};
 	vehicle_status_flags_s  _vehicle_status_flags{};
 
-	Safety _safety{};
+	Safety _safety;
 
 	WorkerThread _worker_thread;
 

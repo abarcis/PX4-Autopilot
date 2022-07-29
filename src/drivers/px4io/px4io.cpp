@@ -531,11 +531,6 @@ void PX4IO::Run()
 	perf_begin(_cycle_perf);
 	perf_count(_interval_perf);
 
-	// schedule minimal update rate if there are no actuator controls
-	if (!_mixing_output.useDynamicMixing()) {
-		ScheduleDelayed(20_ms);
-	}
-
 	/* if we have new control data from the ORB, handle it */
 	if (_param_sys_hitl.get() <= 0) {
 		_mixing_output.update();
@@ -590,10 +585,10 @@ void PX4IO::Run()
 
 				/* publish ACK */
 				if (dsm_ret == OK) {
-					answer_command(cmd, vehicle_command_s::VEHICLE_CMD_RESULT_ACCEPTED);
+					answer_command(cmd, vehicle_command_ack_s::VEHICLE_CMD_RESULT_ACCEPTED);
 
 				} else {
-					answer_command(cmd, vehicle_command_s::VEHICLE_CMD_RESULT_FAILED);
+					answer_command(cmd, vehicle_command_ack_s::VEHICLE_CMD_RESULT_FAILED);
 				}
 			}
 		}
@@ -653,6 +648,9 @@ void PX4IO::Run()
 	}
 
 	_mixing_output.updateSubscriptions(true, true);
+
+	// minimal backup scheduling
+	ScheduleDelayed(20_ms);
 
 	perf_end(_cycle_perf);
 }
@@ -788,29 +786,6 @@ void PX4IO::update_params()
 		_pwm_max_configured = true;
 	}
 
-	// PWM_MAIN_FAILx
-	if (!_pwm_fail_configured) {
-		for (unsigned i = 0; i < _max_actuators; i++) {
-			sprintf(str, "%s_FAIL%u", prefix, i + 1);
-			int32_t pwm_fail = -1;
-
-			if (param_get(param_find(str), &pwm_fail) == PX4_OK) {
-				if (pwm_fail >= 0) {
-					_mixing_output.failsafeValue(i) = math::constrain(pwm_fail, static_cast<int32_t>(0),
-									  static_cast<int32_t>(PWM_HIGHEST_MAX));
-
-					if (pwm_fail != _mixing_output.failsafeValue(i)) {
-						int32_t pwm_fail_new = _mixing_output.failsafeValue(i);
-						param_set(param_find(str), &pwm_fail_new);
-					}
-				}
-			}
-		}
-
-		_pwm_fail_configured = true;
-		updateFailsafe();
-	}
-
 	// PWM_MAIN_DISx
 	if (!_pwm_dis_configured) {
 		for (unsigned i = 0; i < _max_actuators; i++) {
@@ -835,6 +810,33 @@ void PX4IO::update_params()
 
 		_pwm_dis_configured = true;
 		updateDisarmed();
+	}
+
+	// PWM_MAIN_FAILx
+	if (!_pwm_fail_configured) {
+		for (unsigned i = 0; i < _max_actuators; i++) {
+			sprintf(str, "%s_FAIL%u", prefix, i + 1);
+			int32_t pwm_fail = -1;
+
+			if (param_get(param_find(str), &pwm_fail) == PX4_OK) {
+				if (pwm_fail >= 0) {
+					_mixing_output.failsafeValue(i) = math::constrain(pwm_fail, static_cast<int32_t>(0),
+									  static_cast<int32_t>(PWM_HIGHEST_MAX));
+
+					if (pwm_fail != _mixing_output.failsafeValue(i)) {
+						int32_t pwm_fail_new = _mixing_output.failsafeValue(i);
+						param_set(param_find(str), &pwm_fail_new);
+					}
+
+				} else {
+					// if no channel specific failsafe value is configured, use the disarmed value
+					_mixing_output.failsafeValue(i) = _mixing_output.disarmedValue(i);
+				}
+			}
+		}
+
+		_pwm_fail_configured = true;
+		updateFailsafe();
 	}
 
 	// PWM_MAIN_REVx

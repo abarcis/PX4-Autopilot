@@ -42,6 +42,8 @@
 #ifndef EKF_COMMON_H
 #define EKF_COMMON_H
 
+#include <cstdint>
+
 #include <matrix/math.hpp>
 
 namespace estimator
@@ -86,8 +88,9 @@ enum MagFuseType : uint8_t {
 	AUTO    = 0,   	///< The selection of either heading or 3D magnetometer fusion will be automatic
 	HEADING = 1,   	///< Simple yaw angle fusion will always be used. This is less accurate, but less affected by earth field distortions. It should not be used for pitch angles outside the range from -60 to +60 deg
 	MAG_3D  = 2,   	///< Magnetometer 3-axis fusion will always be used. This is more accurate, but more affected by localised earth field distortions
-	INDOOR  = 3,   	///< The same as option 0, but magnetometer or yaw fusion will not be used unless earth frame external aiding (GPS or External Vision) is being used. This prevents inconsistent magnetic fields associated with indoor operation degrading state estimates.
-	NONE    = 4    	///< Do not use magnetometer under any circumstance. Other sources of yaw may be used if selected via the EKF2_AID_MASK parameter.
+	UNUSED  = 3,    ///< Not implemented
+	INDOOR  = 4,   	///< The same as option 0, but magnetometer or yaw fusion will not be used unless earth frame external aiding (GPS or External Vision) is being used. This prevents inconsistent magnetic fields associated with indoor operation degrading state estimates.
+	NONE    = 5    	///< Do not use magnetometer under any circumstance. Other sources of yaw may be used if selected via the EKF2_AID_MASK parameter.
 };
 
 enum TerrainFusionMask : uint8_t {
@@ -263,8 +266,8 @@ struct parameters {
 	float accel_bias_p_noise{1.0e-2f};      ///< process noise for IMU accelerometer bias prediction (m/sec**3)
 	float mage_p_noise{1.0e-3f};            ///< process noise for earth magnetic field prediction (Gauss/sec)
 	float magb_p_noise{1.0e-4f};            ///< process noise for body magnetic field prediction (Gauss/sec)
-	float wind_vel_p_noise{1.0e-1f};        ///< process noise for wind velocity prediction (m/sec**2)
-	const float wind_vel_p_noise_scaler{0.5f};      ///< scaling of wind process noise with vertical velocity
+	float wind_vel_nsd{1.0e-2f};        ///< process noise spectral density for wind velocity prediction (m/sec**2/sqrt(Hz))
+	const float wind_vel_nsd_scaler{0.5f};      ///< scaling of wind process noise with vertical velocity
 
 	float terrain_p_noise{5.0f};            ///< process noise for terrain offset (m/sec)
 	float terrain_gradient{0.5f};           ///< gradient of terrain used to estimate process noise due to changing position (m/m)
@@ -476,7 +479,7 @@ union filter_control_status_u {
 		uint32_t gps                     : 1; ///< 2 - true if GPS measurement fusion is intended
 		uint32_t opt_flow                : 1; ///< 3 - true if optical flow measurements fusion is intended
 		uint32_t mag_hdg                 : 1; ///< 4 - true if a simple magnetic yaw heading fusion is intended
-		uint32_t mag_3D                  : 1; ///< 5 - true if 3-axis magnetometer measurement fusion is inteded
+		uint32_t mag_3D                  : 1; ///< 5 - true if 3-axis magnetometer measurement fusion is intended
 		uint32_t mag_dec                 : 1; ///< 6 - true if synthetic magnetic declination measurements fusion is intended
 		uint32_t in_air                  : 1; ///< 7 - true when the vehicle is airborne
 		uint32_t wind                    : 1; ///< 8 - true when wind velocity is being estimated
@@ -568,7 +571,7 @@ union warning_event_status_u {
 		bool height_sensor_timeout              : 1; ///< 4 - true when the height sensor has not been used to correct the state estimates for a significant time period
 		bool stopping_navigation                : 1; ///< 5 - true when the filter has insufficient data to estimate velocity and position and is falling back to an attitude, height and height rate mode of operation
 		bool invalid_accel_bias_cov_reset       : 1; ///< 6 - true when the filter has detected bad acceerometer bias state estimates and has reset the corresponding covariance matrix elements
-		bool bad_yaw_using_gps_course           : 1; ///< 7 - true when the fiter has detected an invalid yaw esitmate and has reset the yaw angle to the GPS ground course
+		bool bad_yaw_using_gps_course           : 1; ///< 7 - true when the filter has detected an invalid yaw estimate and has reset the yaw angle to the GPS ground course
 		bool stopping_mag_use                   : 1; ///< 8 - true when the filter has detected bad magnetometer data and is stopping further use of the magnetomer data
 		bool vision_data_stopped                : 1; ///< 9 - true when the vision system data has stopped for a significant time period
 		bool emergency_yaw_reset_mag_stopped    : 1; ///< 10 - true when the filter has detected bad magnetometer data, has reset the yaw to anothter source of data and has stopped further use of the magnetomer data
