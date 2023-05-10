@@ -1,6 +1,6 @@
 /****************************************************************************
  *
- *   Copyright (c) 2018 PX4 Development Team. All rights reserved.
+ *   Copyright (c) 2018-2023 PX4 Development Team. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -71,8 +71,7 @@ enum class WaypointType : int {
 	loiter = position_setpoint_s::SETPOINT_TYPE_LOITER,
 	takeoff = position_setpoint_s::SETPOINT_TYPE_TAKEOFF,
 	land = position_setpoint_s::SETPOINT_TYPE_LAND,
-	idle = position_setpoint_s::SETPOINT_TYPE_IDLE,
-	follow_target = position_setpoint_s::SETPOINT_TYPE_FOLLOW_TARGET,
+	idle = position_setpoint_s::SETPOINT_TYPE_IDLE
 };
 
 enum class State {
@@ -95,7 +94,6 @@ public:
 	void overrideCruiseSpeed(const float cruise_speed_m_s) override;
 
 protected:
-	matrix::Vector2f _getTargetVelocityXY(); /**< only used for follow-me and only here because of legacy reason.*/
 	void _updateInternalWaypoints(); /**< Depending on state of vehicle, the internal waypoints might differ from target (for instance if offtrack). */
 	bool _compute_heading_from_2D_vector(float &heading, matrix::Vector2f v); /**< Computes and sets heading a 2D vector */
 
@@ -110,6 +108,8 @@ protected:
 	bool _generateHeadingAlongTraj(); /**< Generates heading along trajectory. */
 	bool isTargetModified() const;
 	void _updateTrajConstraints();
+
+	void rcHelpModifyYaw(float &yaw_sp);
 
 	/** determines when to trigger a takeoff (ignored in flight) */
 	bool _checkTakeoff() override { return _want_takeoff; };
@@ -133,7 +133,6 @@ protected:
 
 	State _current_state{State::none};
 	float _target_acceptance_radius{0.0f}; /**< Acceptances radius of the target */
-	int _mission_gear{landing_gear_s::GEAR_KEEP};
 
 	float _yaw_sp_prev{NAN};
 	AlphaFilter<float> _yawspeed_filter;
@@ -145,7 +144,7 @@ protected:
 	Vector3f _unsmoothed_velocity_setpoint;
 	Sticks _sticks{this};
 	StickAccelerationXY _stick_acceleration_xy{this};
-	StickYaw _stick_yaw;
+	StickYaw _stick_yaw{this};
 	matrix::Vector3f _land_position;
 	float _land_heading;
 	WaypointType _type_previous{WaypointType::idle}; /**< Previous type of current target triplet. */
@@ -169,6 +168,7 @@ protected:
 					(ParamFloat<px4::params::MPC_LAND_SPEED>) _param_mpc_land_speed,
 					(ParamFloat<px4::params::MPC_LAND_CRWL>) _param_mpc_land_crawl_speed,
 					(ParamInt<px4::params::MPC_LAND_RC_HELP>) _param_mpc_land_rc_help,
+					(ParamFloat<px4::params::MPC_LAND_RADIUS>) _param_mpc_land_radius,
 					(ParamFloat<px4::params::MPC_LAND_ALT1>)
 					_param_mpc_land_alt1, // altitude at which we start ramping down speed
 					(ParamFloat<px4::params::MPC_LAND_ALT2>)
@@ -179,8 +179,7 @@ protected:
 					(ParamFloat<px4::params::MPC_Z_V_AUTO_DN>) _param_mpc_z_v_auto_dn,
 					(ParamFloat<px4::params::MPC_TKO_SPEED>) _param_mpc_tko_speed,
 					(ParamFloat<px4::params::MPC_TKO_RAMP_T>)
-					_param_mpc_tko_ramp_t, // time constant for smooth takeoff ramp
-					(ParamFloat<px4::params::MPC_MAN_Y_MAX>) _param_mpc_man_y_max
+					_param_mpc_tko_ramp_t // time constant for smooth takeoff ramp
 				       );
 
 private:
@@ -204,6 +203,8 @@ private:
 	hrt_abstime _time_stamp_reference{0}; /**< time stamp when last reference update occured. */
 
 	WeatherVane _weathervane{this}; /**< weathervane library, used to implement a yaw control law that turns the vehicle nose into the wind */
+
+	matrix::Vector3f _initial_land_position;
 
 	void _limitYawRate(); /**< Limits the rate of change of the yaw setpoint. */
 	bool _evaluateTriplets(); /**< Checks and sets triplets. */
